@@ -1,235 +1,184 @@
-on:
-  workflow_dispatch:
-    inputs:
-      buildThreads:
-        description: 'Build threads for libnd4j. Used to control memory usage of builds.'
-        required: true
-        default: 4
-
-      deployToReleaseStaging:
-        description: 'Whether to deploy to release staging or not.'
-        required: false
-        default: 0
-
-      releaseVersion:
-        description: 'Release version target'
-        required: false
-        default: 1.0.0-M3
-
-      snapshotVersion:
-        description: 'Snapshot version target'
-        required: false
-        default: 1.0.0-SNAPSHOT
-
-      releaseRepoId:
-        description: 'Release repository id'
-        required: false
-        default:
-
-      serverId:
-        description: 'Server id to publish to'
-        required: false
-        default: ossrh
-
-      mvnFlags:
-        description: "Extra maven flags (must escape input yourself if used)"
-        required: false
-        default:
-
-      libnd4jUrl:
-        description: 'Sets a libnd4j download url for this build. LIBND4J_HOME will automatically be set. Should be used when only needing to build other modules.'
-        required: false
-        default:
-
-
-      runsOn:
-        description: 'OS to run on'
-        required: false
-        default: windows-2019
-
-      debug_enabled:
-        description: 'Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)'
-        required: false
-        default: false
 jobs:
   windows-x86_64:
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Cancel Previous Runs
+      uses: styfle/cancel-workflow-action@0.8.0
+      with:
+        access_token: ${{ github.token }}
+    - continue-on-error: true
+      uses: actions/checkout@v2
+    - continue-on-error: true
+      name: Set mvn build command based on matrix
+      run: "if ( \"${{ matrix.libnd4j_file_download }}\" -ne \"\" ) {\n  $modules=\"\
+        \ :nd4j-native-preset,:nd4j-native\"\n} elseif ( \"${{ matrix.helper }}\"\
+        \ -ne \"\" ) {\n  $modules=\":nd4j-native-preset,:nd4j-native,libnd4j\"\n\
+        }  elseif ( \"${{ matrix.extension }}\" -ne \"\" ) {\n  $modules=\":nd4j-native-preset,:nd4j-native,libnd4j\"\
+        \n}  else {\n  $modules=\":nd4j-native-preset,:nd4j-native,libnd4j,:nd4j-native-platform\"\
+        \n}\n\n$command=\"mvn  ${{ matrix.mvn_ext }} -pl $modules -Pcpu -Dlibnd4j.buildthreads=${{\
+        \ matrix.build_threads }} -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false\
+        \ -Dmaven.wagon.http.retryHandler.count=3   -Possrh -Dlibnd4j.buildthreads=${{\
+        \ github.event.inputs.buildThreads }} -Djavacpp.platform=windows-x86_64  \
+        \ -Dlibnd4j.platform=windows-x86_64 deploy -DskipTests --also-make\"\nif (\
+        \ \"${{ matrix.helper }}\" -ne \"\"  -And \"${{ matrix.extension }}\" -ne\
+        \ \"\" ) {\n   $mvn_ext=\" -Dlibnd4j.classifier=windows-x86_64-${{ matrix.helper\
+        \ }}-${{matrix.extension}} -Dlibnd4j.extension=${{ matrix.extension }} -Djavacpp.platform.extension=-${{\
+        \ matrix.helper }}-${{ matrix.extension }}  -Dlibnd4j.helper=${{ matrix.helper\
+        \ }}  -Dlibnd4j.platform=windows-x86_64    deploy -DskipTests\"\n} elseif\
+        \ ( \"${{ matrix.helper }}\" -ne \"\" ) {\n    $mvn_ext=\" -Dlibnd4j.classifier=windows-x86_64-${{\
+        \ matrix.helper }} -Dlibnd4j.extension=${{ matrix.helper }} -Djavacpp.platform.extension=-${{\
+        \ matrix.helper }} -Djavacpp.platform=windows-x86_64  -Dlibnd4j.helper=${{\
+        \ matrix.helper }} -Dlibnd4j.platform=windows-x86_64   deploy -DskipTests\"\
+        \n}  elseif ( \"${{ matrix.extension }}\" -ne \"\" ) {\n      $mvn_ext=\"\
+        \ -Dlibnd4j.classifier=windows-x86_64-${{matrix.extension}} -Dlibnd4j.extension=${{\
+        \ matrix.extension }} -Djavacpp.platform.extension=-${{ matrix.extension }}\"\
+        \n} else {\n   $mvn_ext=\" -Dlibnd4j.classifier=windows-x86_64\"\n}\n\nif\
+        \  (  \"${{ matrix.libnd4j_file_download }}\" -ne  \"\")  {\n       echo \"\
+        Adding libnd4j download\"\n       $libnd4j_url_to_write = -join(\"LIBND4J_FILE_NAME=\"\
+        ,\"$(${{ matrix.libnd4j_file_download }}/$libnd4j_download_file_url)\");\n\
+        \       echo $libnd4j_url_to_write  | Out-File -FilePath  \"$env:GITHUB_ENV\"\
+        \ -Encoding utf8 -Append\n}\n\n$command2 = -join(\"$($command)\",\"$($mvn_ext)\"\
+        );\n$to_write = -join(\"COMMAND=\",\"$($command2)\");\necho \"Setting command\
+        \ for helper ${{ matrix.helper }} and extension ${{ matrix.extension }} to\
+        \ $($command2)\"\necho $command2  | Out-File -FilePath   \"$env:GITHUB_WORKSPACE/mvn-command.bat\"\
+        \ -Encoding utf8 -Append\necho $to_write  | Out-File -FilePath  \"$env:GITHUB_ENV\"\
+        \ -Encoding utf8 -Append\n"
+      shell: powershell
+    - continue-on-error: true
+      name: Set up Java for publishing to GitHub Packages
+      uses: konduitai/setup-java@main
+      with:
+        cache: maven
+        distribution: temurin
+        gpg-passphrase: MAVEN_GPG_PASSPHRASE
+        gpg-private-key: ${{ secrets.SONATYPE_GPG_KEY }}
+        java-version: 11
+        server-id: ${{ github.event.inputs.serverId }}
+        server-password: MAVEN_PASSWORD
+        server-username: MAVEN_USERNAME
+    - continue-on-error: true
+      uses: msys2/setup-msys2@v2
+      with:
+        install: base-devel  git tar pkg-config unzip p7zip zip autoconf autoconf-archive
+          automake patch   mingw-w64-x86_64-make --noconfirm mingw-w64-x86_64-gnupg
+          mingw-w64-x86_64-cmake mingw-w64-x86_64-nasm mingw-w64-x86_64-toolchain
+          mingw-w64-x86_64-libtool mingw-w64-x86_64-gcc  mingw-w64-x86_64-gcc-fortran
+          mingw-w64-x86_64-libwinpthread-git mingw-w64-x86_64-SDL mingw-w64-x86_64-ragel
+        msystem: MINGW64
+        update: true
+    - continue-on-error: true
+      name: Setup windows path
+      run: echo "C:\msys64\mingw64\bin;C:\msys64\usr\bin" | Out-File -FilePath $env:GITHUB_PATH
+        -Encoding utf8 -Append
+      shell: powershell
+    - continue-on-error: true
+      if: ${{ matrix.libnd4j_file_download != '' }}
+      name: Setup libnd4j home if a download url is specified
+      run: 'mkdir "%GITHUB_WORKSPACE%/openblas_home"
+
+        cd "%GITHUB_WORKSPACE%/openblas_home"
+
+        wget https://repo1.maven.org/maven2/org/bytedeco/openblas/0.3.19-1.5.7/openblas-0.3.19-1.5.7-windows-x86_64.jar
+
+        unzip openblas-0.3.19-1.5.7-windows-x86_64.jar
+
+        cd ..
+
+        echo "OPENBLAS_PATH=${GITHUB_WORKSPACE}/openblas_home/org/bytedeco/openblas/windows-x86_64/"
+        | Out-File -FilePath  "$env:GITHUB_ENV" -Encoding utf8 -Append
+
+        '
+      shell: powershell
+    - continue-on-error: true
+      env:
+        GPG_PRIVATE_KEY: ${{ secrets.SONATYPE_GPG_KEY }}
+        PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+      name: Import GPG Key
+      uses: crazy-max/ghaction-import-gpg@v1
+    - continue-on-error: true
+      env:
+        EXTENSION: ${{ matrix.extension }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        GPG_SIGNING_KEY: ${{ secrets.SONATYPE_GPG_KEY }}
+        HELPER: ${{ matrix.helper }}
+        LIBND4J_FILE_NAME: ${{ matrix.libnd4j_file_download }}
+        MAVEN_GPG_KEY: ${{ secrets.SONATYPE_GPG_KEY }}
+        MAVEN_GPG_PASSPHRASE: ${{ secrets.PACKAGES_GPG_PASS }}
+        MAVEN_PASSWORD: ${{ secrets.SONATYPE_USER1_PASS }}
+        MAVEN_USERNAME: ${{ secrets.SONATYPE_USER_1 }}
+        MODULES: ${{ matrix.mvn_flags }}
+        PERFORM_RELEASE: ${{ matrix.deploy_to_release_staging }}
+        PUBLISH_TO: ossrh
+        RELEASE_REPO_ID: ${{ matrix.release_repo_id }}
+        RELEASE_VERSION: ${{ matrix.release_version }}
+        SNAPSHOT_VERSION: ${{ matrix.snapshot_version }}
+      name: Run windows cpu build
+      run: "echo \"libnd4j build threads ${{ matrix.build_threads }}\"\necho \"deploy\
+        \ to release staging repo or not ${{ matrix.deploy_to_release_staging }}\"\
+        \necho \"release version ${{ matrix.release_version }}\"\necho \"snapshot\
+        \ version ${{ matrix.snapshot_version }}\"\necho \"debug enabled ${{ matrix.debug_enabled\
+        \ }}\"\necho \"libnd4j url ${{ matrix.libnd4j_file_download }}\"\necho \"\
+        maven flags ${{ matrix.mvn_flags }}\"\necho \"snapshot version ${{ matrix.snapshot_version\
+        \ }}\"\necho \"server id ${{ matrix.server_id }}\"\necho \"release repo id\
+        \ ${{ matrix.release_repo_id }}\"\n\nif \"%PERFORM_RELEASE%\"==\"1\" (\n \
+        \    echo \"Running release\"\n     bash \"%GITHUB_WORKSPACE%/bootstrap-libnd4j-from-url.sh\"\
+        \ windows x86_64 \"${{ matrix.helper }}\" \"${{ matrix.extension }}\"\n  \
+        \   bash \"%GITHUB_WORKSPACE%/release-specified-component.sh\"  \"%RELEASE_VERSION%\"\
+        \ \"%SNAPSHOT_VERSION%\" \"%RELEASE_REPO_ID%\" \"%COMMAND%\"\n) else (\n \
+        \   if \"%PERFORM_RELEASE%\"==1 (\n          echo \"Running release\"\n  \
+        \         bash \"%GITHUB_WORKSPACE%/bootstrap-libnd4j-from-url.sh\"\n    \
+        \       bash \"%GITHUB_WORKSPACE%/release-specified-component.sh\"  \"%RELEASE_VERSION%\"\
+        \ \"%SNAPSHOT_VERSION%\" \"%RELEASE_REPO_ID%\" \"%COMMAND%\"\n     ) else\
+        \ (\n        echo \"Running snapshots\"\n        bash \"%GITHUB_WORKSPACE%/bootstrap-libnd4j-from-url.sh\"\
+        \n        call \"%GITHUB_WORKSPACE%\\mvn-command.bat\"\n     )\n)\n"
+      shell: cmd
     strategy:
       fail-fast: false
       matrix:
-        helper: [ onednn,"" ]
-        extension: [ avx2,avx512,"" ]
+        extension:
+        - avx2
+        - avx512
+        - ''
+        helper:
+        - onednn
+        - ''
         include:
-          - mvn_ext: ${{ github.event.inputs.mvnFlags }}
-            experimental: true
-            name: Extra maven flags
-          - debug_enabled: ${{ github.event.inputs.debug_enabled }}
-            experimental: true
-            name: Debug enabled
-
-          - runs_on: ${{ github.event.inputs.runsOn }}
-            experimental: true
-            name: OS to run on
-
-          - libnd4j_file_download: ${{ github.event.inputs.libnd4jUrl }}
-            experimental: true
-            name: OS to run on
-
-          - deploy_to_release_staging: ${{ github.event.inputs.deployToReleaseStaging }}
-            experimental: true
-            name: Whether to deploy to release staging or not
-
-          - release_version: ${{ github.event.inputs.releaseVersion }}
-            experimental: true
-            name: Release version
-
-          - snapshot_version: ${{ github.event.inputs.snapshotVersion }}
-            experimental: true
-            name: Snapshot version
-
-          - server_id: ${{ github.event.inputs.serverId }}
-            experimental: true
-            name: Server id
-
-          - release_repo_id: ${{ github.event.inputs.releaseRepoId }}
-            experimental: true
-            name: The release repository to run on
-
-          - mvn_flags: ${{ github.event.inputs.mvnFlags }}
-            experimental: true
-            name: Extra maven flags to use as part of the build
-
-          - build_threads: ${{ github.event.inputs.buildThreads }}
-            experimental: true
-            name: The number of threads to build libnd4j with
-
-
-
-    runs-on: ${{ matrix.runs_on }}
-    steps:
-      - name: Cancel Previous Runs
-        uses: styfle/cancel-workflow-action@0.8.0
-        with:
-          access_token: ${{ github.token }}
-      - uses: actions/checkout@v2
-      - name: Set mvn build command based on matrix
-        shell: powershell
-        run: |
-            if ( "${{ matrix.libnd4j_file_download }}" -ne "" ) {
-              $modules=" :nd4j-native-preset,:nd4j-native"
-            } elseif ( "${{ matrix.helper }}" -ne "" ) {
-              $modules=":nd4j-native-preset,:nd4j-native,libnd4j"
-            }  elseif ( "${{ matrix.extension }}" -ne "" ) {
-              $modules=":nd4j-native-preset,:nd4j-native,libnd4j"
-            }  else {
-              $modules=":nd4j-native-preset,:nd4j-native,libnd4j,:nd4j-native-platform"
-            }
-          
-            $command="mvn  ${{ matrix.mvn_ext }} -pl $modules -Pcpu -Dlibnd4j.buildthreads=${{ matrix.build_threads }} -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3   -Possrh -Dlibnd4j.buildthreads=${{ github.event.inputs.buildThreads }} -Djavacpp.platform=windows-x86_64   -Dlibnd4j.platform=windows-x86_64 deploy -DskipTests --also-make"
-            if ( "${{ matrix.helper }}" -ne ""  -And "${{ matrix.extension }}" -ne "" ) {
-               $mvn_ext=" -Dlibnd4j.classifier=windows-x86_64-${{ matrix.helper }}-${{matrix.extension}} -Dlibnd4j.extension=${{ matrix.extension }} -Djavacpp.platform.extension=-${{ matrix.helper }}-${{ matrix.extension }}  -Dlibnd4j.helper=${{ matrix.helper }}  -Dlibnd4j.platform=windows-x86_64    deploy -DskipTests"
-            } elseif ( "${{ matrix.helper }}" -ne "" ) {
-                $mvn_ext=" -Dlibnd4j.classifier=windows-x86_64-${{ matrix.helper }} -Dlibnd4j.extension=${{ matrix.helper }} -Djavacpp.platform.extension=-${{ matrix.helper }} -Djavacpp.platform=windows-x86_64  -Dlibnd4j.helper=${{ matrix.helper }} -Dlibnd4j.platform=windows-x86_64   deploy -DskipTests"
-            }  elseif ( "${{ matrix.extension }}" -ne "" ) {
-                  $mvn_ext=" -Dlibnd4j.classifier=windows-x86_64-${{matrix.extension}} -Dlibnd4j.extension=${{ matrix.extension }} -Djavacpp.platform.extension=-${{ matrix.extension }}"
-            } else {
-               $mvn_ext=" -Dlibnd4j.classifier=windows-x86_64"
-            }
-
-            if  (  "${{ matrix.libnd4j_file_download }}" -ne  "")  {
-                   echo "Adding libnd4j download"
-                   $libnd4j_url_to_write = -join("LIBND4J_FILE_NAME=","$(${{ matrix.libnd4j_file_download }}/$libnd4j_download_file_url)");
-                   echo $libnd4j_url_to_write  | Out-File -FilePath  "$env:GITHUB_ENV" -Encoding utf8 -Append
-            }
-
-            $command2 = -join("$($command)","$($mvn_ext)");
-            $to_write = -join("COMMAND=","$($command2)");
-            echo "Setting command for helper ${{ matrix.helper }} and extension ${{ matrix.extension }} to $($command2)"
-            echo $command2  | Out-File -FilePath   "$env:GITHUB_WORKSPACE/mvn-command.bat" -Encoding utf8 -Append
-            echo $to_write  | Out-File -FilePath  "$env:GITHUB_ENV" -Encoding utf8 -Append
-
-
-      - name: Set up Java for publishing to GitHub Packages
-        uses: konduitai/setup-java@main
-        with:
-          java-version: 11
-          distribution: 'temurin'
-          server-id:   ${{ github.event.inputs.serverId }}
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
-          gpg-private-key: ${{ secrets.SONATYPE_GPG_KEY }}
-          gpg-passphrase: MAVEN_GPG_PASSPHRASE
-          cache: 'maven'
-
-
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: base-devel  git tar pkg-config unzip p7zip zip autoconf autoconf-archive automake patch   mingw-w64-x86_64-make --noconfirm mingw-w64-x86_64-gnupg mingw-w64-x86_64-cmake mingw-w64-x86_64-nasm mingw-w64-x86_64-toolchain mingw-w64-x86_64-libtool mingw-w64-x86_64-gcc  mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-libwinpthread-git mingw-w64-x86_64-SDL mingw-w64-x86_64-ragel
-      - name: Setup windows path
-        shell: powershell
-        run: echo "C:\msys64\mingw64\bin;C:\msys64\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Setup libnd4j home if a download url is specified
-        shell: powershell
-        run: |
-            mkdir "%GITHUB_WORKSPACE%/openblas_home"
-            cd "%GITHUB_WORKSPACE%/openblas_home"
-            wget https://repo1.maven.org/maven2/org/bytedeco/openblas/0.3.19-1.5.7/openblas-0.3.19-1.5.7-windows-x86_64.jar
-            unzip openblas-0.3.19-1.5.7-windows-x86_64.jar
-            cd ..
-            echo "OPENBLAS_PATH=${GITHUB_WORKSPACE}/openblas_home/org/bytedeco/openblas/windows-x86_64/" | Out-File -FilePath  "$env:GITHUB_ENV" -Encoding utf8 -Append
-        if: ${{ matrix.libnd4j_file_download != '' }}
-      - name: Import GPG Key
-        uses: crazy-max/ghaction-import-gpg@v1
-        env:
-            GPG_PRIVATE_KEY: ${{ secrets.SONATYPE_GPG_KEY }}
-            PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-      - name: Run windows cpu build
-        shell: cmd
-        run: |
-              echo "libnd4j build threads ${{ matrix.build_threads }}"
-              echo "deploy to release staging repo or not ${{ matrix.deploy_to_release_staging }}"
-              echo "release version ${{ matrix.release_version }}"
-              echo "snapshot version ${{ matrix.snapshot_version }}"
-              echo "debug enabled ${{ matrix.debug_enabled }}"
-              echo "libnd4j url ${{ matrix.libnd4j_file_download }}"
-              echo "maven flags ${{ matrix.mvn_flags }}"
-              echo "snapshot version ${{ matrix.snapshot_version }}"
-              echo "server id ${{ matrix.server_id }}"
-              echo "release repo id ${{ matrix.release_repo_id }}"
-
-              if "%PERFORM_RELEASE%"=="1" (
-                   echo "Running release"
-                   bash "%GITHUB_WORKSPACE%/bootstrap-libnd4j-from-url.sh" windows x86_64 "${{ matrix.helper }}" "${{ matrix.extension }}"
-                   bash "%GITHUB_WORKSPACE%/release-specified-component.sh"  "%RELEASE_VERSION%" "%SNAPSHOT_VERSION%" "%RELEASE_REPO_ID%" "%COMMAND%"
-              ) else (
-                  if "%PERFORM_RELEASE%"==1 (
-                        echo "Running release"
-                         bash "%GITHUB_WORKSPACE%/bootstrap-libnd4j-from-url.sh"
-                         bash "%GITHUB_WORKSPACE%/release-specified-component.sh"  "%RELEASE_VERSION%" "%SNAPSHOT_VERSION%" "%RELEASE_REPO_ID%" "%COMMAND%"
-                   ) else (
-                      echo "Running snapshots"
-                      bash "%GITHUB_WORKSPACE%/bootstrap-libnd4j-from-url.sh"
-                      call "%GITHUB_WORKSPACE%\mvn-command.bat"
-                   )
-              )
-        env:
-          MAVEN_GPG_KEY: ${{ secrets.SONATYPE_GPG_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_TO: ossrh
-          MAVEN_USERNAME: ${{ secrets.SONATYPE_USER_1 }}
-          MAVEN_PASSWORD: ${{ secrets.SONATYPE_USER1_PASS }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.PACKAGES_GPG_PASS }}
-          PERFORM_RELEASE: ${{ matrix.deploy_to_release_staging }}
-          RELEASE_VERSION: ${{ matrix.release_version }}
-          SNAPSHOT_VERSION: ${{ matrix.snapshot_version }}
-          RELEASE_REPO_ID: ${{ matrix.release_repo_id }}
-          GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-          GPG_SIGNING_KEY: ${{ secrets.SONATYPE_GPG_KEY }}
-          MODULES: ${{ matrix.mvn_flags }}
-          HELPER: ${{ matrix.helper }}
-          EXTENSION: ${{ matrix.extension }}
-          LIBND4J_FILE_NAME: ${{ matrix.libnd4j_file_download }}
-
-
-
+        - experimental: true
+          mvn_ext: ${{ github.event.inputs.mvnFlags }}
+          name: Extra maven flags
+        - debug_enabled: ${{ github.event.inputs.debug_enabled }}
+          experimental: true
+          name: Debug enabled
+        - experimental: true
+          name: OS to run on
+          runs_on: ${{ github.event.inputs.runsOn }}
+        - experimental: true
+          libnd4j_file_download: ${{ github.event.inputs.libnd4jUrl }}
+          name: OS to run on
+        - deploy_to_release_staging: ${{ github.event.inputs.deployToReleaseStaging
+            }}
+          experimental: true
+          name: Whether to deploy to release staging or not
+        - experimental: true
+          name: Release version
+          release_version: ${{ github.event.inputs.releaseVersion }}
+        - experimental: true
+          name: Snapshot version
+          snapshot_version: ${{ github.event.inputs.snapshotVersion }}
+        - experimental: true
+          name: Server id
+          server_id: ${{ github.event.inputs.serverId }}
+        - experimental: true
+          name: The release repository to run on
+          release_repo_id: ${{ github.event.inputs.releaseRepoId }}
+        - experimental: true
+          mvn_flags: ${{ github.event.inputs.mvnFlags }}
+          name: Extra maven flags to use as part of the build
+        - build_threads: ${{ github.event.inputs.buildThreads }}
+          experimental: true
+          name: The number of threads to build libnd4j with
+on:
+  repository_dispatch:
+    types: trigger-ga___build-deploy-windows.yml
